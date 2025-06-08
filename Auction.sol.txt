@@ -1,0 +1,117 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Auction {
+    // Owner of the contract
+    address private owner;
+    // End time of the auction
+    uint256 private auctionEndTime;
+    // State of the auction
+    bool private auctionEnded;
+    // Current highest bid amount
+    uint256 private highestBid;
+    // Address of the highest bidder
+    address private highestBidder;
+    // Mapping of bids from each address
+    mapping(address => uint256) private bids;
+    // List of all participants
+    address[] private bidders;
+
+    // Events
+    event NewBid(address indexed bidder, uint256 amount);
+    event AuctionEnded(address winner, uint256 amount);
+
+    // Modifiers
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only the owner can call this function");
+        _;
+    }
+
+    modifier auctionActive() {
+        require(block.timestamp < auctionEndTime, "Auction has ended");
+        _;
+    }
+
+    modifier auctionNotEnded() {
+        require(!auctionEnded, "Auction has already ended");
+        _;
+    }
+
+    // Reentrancy guard
+    bool private locked;
+
+    modifier noReentrancy() {
+        require(!locked, "No reentrancy allowed");
+        locked = true;
+        _;
+        locked = false;
+    }
+
+    // Constructor to initialize the auction
+    constructor(uint256 _biddingTime) {
+        owner = msg.sender; // Set the owner of the contract
+        auctionEndTime = block.timestamp + _biddingTime; // Set the auction end time
+    }
+
+    // Function to place a bid
+    function placeBid() public payable auctionActive {
+        require(msg.value > highestBid + (highestBid * 5 / 100), "Bid must be at least 5% higher than the highest bid");
+        
+        // Refund the previous highest bidder
+        if (highestBidder != address(0)) {
+            // Store previous highest bid for refund
+            bids[highestBidder] += highestBid;
+        }
+
+        highestBidder = msg.sender; // Update the highest bidder
+        highestBid = msg.value; // Update the highest bid
+        bidders.push(msg.sender); // Add the new bidder to the list
+
+        emit NewBid(msg.sender, msg.value); // Emit the new bid event
+
+        // Extend auction time if bid is placed in the last 10 minutes
+        if (auctionEndTime - block.timestamp < 10 minutes) {
+            auctionEndTime += 10 minutes;
+        }
+    }
+
+    // Function to end the auction
+    function endAuction() public onlyOwner auctionNotEnded {
+        auctionEnded = true; // Mark the auction as ended
+        emit AuctionEnded(highestBidder, highestBid); // Emit the auction ended event
+    }
+
+    // Function to withdraw deposits
+    function withdraw() public noReentrancy {
+        require(auctionEnded, "Auction has not ended yet");
+        require(msg.sender == highestBidder, "Only the highest bidder can withdraw");
+
+        uint256 amount = bids[msg.sender]; // Get the amount for the winner
+        bids[msg.sender] = 0; // Reset the sender's bid to prevent re-entrancy
+
+        // Deduct 2% commission for the winner
+        amount += highestBid * 98 / 100;
+
+        // Ensure the contract has enough balance to cover the withdrawal
+        require(address(this).balance >= amount, "Insufficient balance in contract");
+
+        // Use a safe transfer method to prevent re-entrancy
+        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        require(success, "Transfer failed"); // Ensure the transfer was successful
+    }
+
+    // Function to get the bids
+    function getBids() public view returns (address[] memory, uint256[] memory) {
+        uint256[] memory amounts = new uint256[](bidders.length); // Create an array for the amounts
+        for (uint256 i = 0; i < bidders.length; i++) {
+            amounts[i] = bids[bidders[i]]; // Fill the amounts array
+        }
+        return (bidders, amounts); // Return the bidders and their amounts
+    }
+
+    // Function to get the winner
+    function getWinner() public view returns (address, uint256) {
+        require(auctionEnded, "Auction has not ended yet");
+        return (highestBidder, highestBid); // Return the winner and the highest bid
+    }
+}
